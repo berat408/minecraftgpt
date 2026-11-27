@@ -5,7 +5,6 @@ import javazoom.jl.decoder.Decoder;
 import javazoom.jl.decoder.Header;
 import javazoom.jl.decoder.SampleBuffer;
 import net.sourceforge.jaad.aac.AACException;
-import net.sourceforge.jaad.aac.SampleBuffer as AacSampleBuffer;
 import org.jcodec.containers.mp4.MP4Packet;
 import org.jcodec.containers.mp4.demuxer.MP4Demuxer;
 import org.jcodec.containers.mp4.demuxer.AbstractMP4DemuxerTrack;
@@ -196,7 +195,7 @@ public class AudioPlayer {
             }
             byte[] asc = audioTrack.getMeta().getCodecPrivate();
             net.sourceforge.jaad.aac.Decoder aac = new net.sourceforge.jaad.aac.Decoder(asc);
-            AacSampleBuffer sb = new AacSampleBuffer();
+            net.sourceforge.jaad.aac.SampleBuffer sb = new net.sourceforge.jaad.aac.SampleBuffer();
 
             short[] out = new short[44100 * 2 * 10];
             int count = 0;
