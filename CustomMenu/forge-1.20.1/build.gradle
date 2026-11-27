@@ -45,7 +45,7 @@ dependencies {
     shade 'org.jcodec:jcodec:0.2.5'
     shade 'org.jcodec:jcodec-javase:0.2.5'
     shade 'javazoom:jlayer:1.0.1'
-    shade 'com.tianscar.javasound:jaad:0.8.9'
+    shade 'com.tianscar.javasound:jaad:0.9.4'
 }
 
 jar {
