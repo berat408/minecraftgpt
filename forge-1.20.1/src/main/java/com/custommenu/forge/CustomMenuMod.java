@@ -97,7 +97,11 @@ public class CustomMenuMod {
     }
 
     /** Görseli/GIF'i/videoyu (gerekirse) yükler; çizilebilir hale geldiyse true. Render thread'den çağrılmalı. */
-    static boolean prepare(String path, boolean loop) {
+    private static long videoStartedAt;
+    static boolean prepare(String path, boolean loop) { return prepare(path, loop, false); }
+
+    /** syncAudio: videonun sesi çalacaksa, video ses hazır olana kadar başlamaz. */
+    static boolean prepare(String path, boolean loop, boolean syncAudio) {
         Minecraft mc = Minecraft.getInstance();
         byte[] png = pendingPng.getAndSet(null);
         if (png != null) {
@@ -121,6 +125,7 @@ public class CustomMenuMod {
             } catch (Throwable t) { fail("GIF hatası", t); }
         }
         VideoDecoder v = video;
+        if (v != null && !v.gate && (AudioPlayer.isPlaying() || AudioPlayer.hasFailed() || System.currentTimeMillis() - videoStartedAt > 20000)) v.gate = true;
         if (v != null) {
             VideoDecoder.Frame f = v.latest.getAndSet(null);
             if (f != null) {
@@ -147,6 +152,7 @@ public class CustomMenuMod {
             mediaStatus = "Yükleniyor...";
             if (kind == MediaKind.VIDEO) {
                 video = new VideoDecoder(file, loop, 0); // orijinal çözünürlük
+                video.gate = !syncAudio; videoStartedAt = System.currentTimeMillis();
                 Thread t = new Thread(video, "CustomMenu-Video"); t.setDaemon(true); t.start();
             } else {
                 loading = true;
@@ -203,7 +209,7 @@ public class CustomMenuMod {
         @Override public void render(float partialTick, float alpha) {
             try {
                 ScreenSettings s = activeMedia(ScreenType.MAINMENU);
-                if (s != null && prepare(s.mediaPath, s.loop)) {
+                if (s != null && prepare(s.mediaPath, s.loop, s.useVideoAudio && s.playSound)) {
                     Minecraft mc = Minecraft.getInstance();
                     GuiGraphics g = new GuiGraphics(mc, mc.renderBuffers().bufferSource());
                     drawMedia(g, s, mc.getWindow().getGuiScaledWidth(), mc.getWindow().getGuiScaledHeight());
@@ -252,7 +258,7 @@ public class CustomMenuMod {
             try {
                 if (!(e.getScreen() instanceof PauseScreen)) return;
                 ScreenSettings s = activeMedia(ScreenType.PAUSE);
-                if (s == null || !prepare(s.mediaPath, s.loop)) return;
+                if (s == null || !prepare(s.mediaPath, s.loop, s.useVideoAudio && s.playSound)) return;
                 drawMedia(e.getGuiGraphics(), s, e.getScreen().width, e.getScreen().height);
             } catch (Throwable t) { LOG.warn("CustomMenu: ESC çizim hatası", t); }
         }
@@ -263,7 +269,7 @@ public class CustomMenuMod {
             try {
                 if (!(e.getScreen() instanceof WinScreen)) return;
                 ScreenSettings s = activeMedia(ScreenType.GAMEOVER);
-                if (s == null || !prepare(s.mediaPath, s.loop)) return;
+                if (s == null || !prepare(s.mediaPath, s.loop, s.useVideoAudio && s.playSound)) return;
                 GuiGraphics g = e.getGuiGraphics();
                 g.setColor(1f, 1f, 1f, 0.45f);
                 drawMedia(g, s, e.getScreen().width, e.getScreen().height);
@@ -281,8 +287,10 @@ public class CustomMenuMod {
             ScreenType t = typeOf(cur);
             if (t != null && CONFIG.enabled) {
                 ScreenSettings s = CONFIG.get(t);
-                if (s.enabled && s.playSound && !s.audioPath.isEmpty()) {
-                    path = s.audioPath; vol = s.volume; loop = s.loop && t != ScreenType.INTRO;
+                if (s.enabled && s.playSound) {
+                    boolean vid = s.useVideoAudio && !s.mediaPath.isEmpty() && MediaKind.detect(s.mediaPath) == MediaKind.VIDEO;
+                    if (vid) path = s.mediaPath; else if (!s.audioPath.isEmpty()) path = s.audioPath;
+                    vol = s.volume; loop = s.loop && t != ScreenType.INTRO;
                 }
             }
             AudioPlayer.update(path, vol, loop);

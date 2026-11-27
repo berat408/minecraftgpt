@@ -4,6 +4,7 @@ public class ScreenSettings {
     public boolean showMedia = false;
     public boolean playSound = false;
     public boolean loop = true;
+    public boolean useVideoAudio = false; // videonun kendi sesini çal
     public String mediaPath = "";
     public String audioPath = "";
     public float volume = 1.0f;

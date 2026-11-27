@@ -7,7 +7,7 @@ public enum MediaKind {
         if (n.endsWith(".png") || n.endsWith(".jpg") || n.endsWith(".jpeg")) return IMAGE;
         if (n.endsWith(".gif")) return GIF;
         if (n.endsWith(".mp4")) return VIDEO;
-        if (n.endsWith(".mp3")) return AUDIO;
+        if (n.endsWith(".mp3") || n.endsWith(".ogg") || n.endsWith(".wav") || n.endsWith(".m4a")) return AUDIO;
         return UNKNOWN;
     }
 }
