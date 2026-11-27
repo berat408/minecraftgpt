@@ -164,7 +164,8 @@ public class AudioPlayer {
                 try {
                     SampleBuffer sb = (SampleBuffer) decoder.decodeFrame(h, bitstream);
                     if (rate == 0) {
-                        ch = sb.getChannels();
+                        ch = sb.getChannelCount();
+                        rate = sb.getSampleFrequency();
                     }
                     short[] buf = sb.getBuffer();
                     int len = sb.getBufferLength();
