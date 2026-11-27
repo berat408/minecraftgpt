@@ -6,6 +6,7 @@ import javazoom.jl.decoder.Header;
 import javazoom.jl.decoder.SampleBuffer;
 import net.sourceforge.jaad.aac.AACException;
 import org.jcodec.containers.mp4.MP4Packet;
+import org.jcodec.containers.mp4.boxes.AudioSampleEntry;
 import org.jcodec.containers.mp4.demuxer.MP4Demuxer;
 import org.jcodec.containers.mp4.demuxer.AbstractMP4DemuxerTrack;
 import org.jcodec.common.io.FileChannelWrapper;
@@ -163,7 +164,6 @@ public class AudioPlayer {
                 try {
                     SampleBuffer sb = (SampleBuffer) decoder.decodeFrame(h, bitstream);
                     if (rate == 0) {
-                        rate = sb.getSampleRate();
                         ch = sb.getChannels();
                     }
                     short[] buf = sb.getBuffer();
@@ -189,18 +189,21 @@ public class AudioPlayer {
         try {
             ch = NIOUtils.readableChannel(file);
             MP4Demuxer demuxer = MP4Demuxer.createMP4Demuxer(ch);
-            AbstractMP4DemuxerTrack audioTrack = demuxer.getAudioTracks().isEmpty() ? null : demuxer.getAudioTracks().get(0);
+            AbstractMP4DemuxerTrack audioTrack = demuxer.getAudioTracks().isEmpty() ? null : (AbstractMP4DemuxerTrack) demuxer.getAudioTracks().get(0);
             if (audioTrack == null) {
                 return null;
             }
-            byte[] asc = audioTrack.getMeta().getCodecPrivate();
+            ByteBuffer ascBuffer = audioTrack.getMeta().getCodecPrivate();
+            byte[] asc = new byte[ascBuffer.remaining()];
+            ascBuffer.get(asc);
+            AudioSampleEntry audioFormat = (AudioSampleEntry) audioTrack.getSampleEntries()[0];
             net.sourceforge.jaad.aac.Decoder aac = new net.sourceforge.jaad.aac.Decoder(asc);
             net.sourceforge.jaad.aac.SampleBuffer sb = new net.sourceforge.jaad.aac.SampleBuffer();
 
             short[] out = new short[44100 * 2 * 10];
             int count = 0;
-            int rate = 44100;
-            int channels = 2;
+            int rate = (int) audioFormat.getSampleRate();
+            int channels = audioFormat.getChannelCount();
 
             MP4Packet pkt;
             while (count < MAX_SHORTS && (pkt = (MP4Packet) audioTrack.nextFrame()) != null) {
@@ -210,8 +213,6 @@ public class AudioPlayer {
                 try {
                     aac.decodeFrame(frameBytes, sb);
                     byte[] pcmBytes = sb.getData();
-                    rate = sb.getSampleRate();
-                    channels = sb.getChannels();
                     int shortsLen = pcmBytes.length / 2;
                     if (count + shortsLen > out.length) {
                         out = Arrays.copyOf(out, Math.min(MAX_SHORTS, Math.max(out.length * 2, count + shortsLen)));
