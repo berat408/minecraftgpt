@@ -1,29 +1,68 @@
 plugins {
-    id 'java'
-    id 'net.minecraftforge.gradle' version '[6.0.24,6.2)'
+    id 'eclipse'
+    id 'idea'
+    id 'maven-publish'
+    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
 }
-group = 'com.custommenu'
-version = '1.1.0'
-base { archivesName = 'custommenu-forge-1.20.1' }
-java.toolchain.languageVersion = JavaLanguageVersion.of(17)
-minecraft { mappings channel: 'official', version: '1.20.1' }
-sourceSets.main.java.srcDir '../common/src/main/java'
 
-configurations { shade }
-repositories { mavenCentral() }
-dependencies {
-    minecraft 'net.minecraftforge:forge:1.20.1-47.3.0'
-    // MP3 (jlayer) ve MP4 (jcodec) çözücüler; mod JAR'ının içine gömülür
-    ['javazoom:jlayer:1.0.1', 'org.jcodec:jcodec:0.2.5', 'org.jcodec:jcodec-javase:0.2.5'].each { lib ->
-        implementation lib
-        shade lib
+version = '1.2.0'
+group = 'com.custommenu'
+
+base {
+    archivesName = 'custommenu-forge-1.20.1'
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+minecraft {
+    mappings channel: 'official', version: '1.20.1'
+    copyIdeResources = true
+    runs {
+        client {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'info'
+            mods {
+                custommenu {
+                    source sourceSets.main
+                }
+            }
+        }
     }
 }
 
-// MP3 kütüphanesini mod JAR'ının içine göm
-jar {
-    from { configurations.shade.collect { it.isDirectory() ? it : zipTree(it) } }
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+configurations {
+    shade
+    implementation.extendsFrom(shade)
 }
-tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    minecraft 'net.minecraftforge:forge:1.20.1-47.2.0'
+    shade 'org.jcodec:jcodec:0.2.5'
+    shade 'org.jcodec:jcodec-javase:0.2.5'
+    shade 'javazoom:jlayer:1.0.1'
+    shade 'com.tianscar.javasound:jaad:0.8.9'
+}
+
+jar {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from {
+        configurations.shade.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    manifest {
+        attributes([
+            "Specification-Title": "custommenu",
+            "Specification-Vendor": "custommenu",
+            "Specification-Version": "1",
+            "Implementation-Title": project.name,
+            "Implementation-Version": project.jar.archiveVersion,
+            "Implementation-Vendor": "custommenu"
+        ])
+    }
+}
+
+jar.finalizedBy('reobfJar')
