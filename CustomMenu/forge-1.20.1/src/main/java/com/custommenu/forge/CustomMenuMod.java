@@ -19,7 +19,6 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.loading.FMLEnvironment;
 import net.minecraftforge.fml.loading.FMLPaths;
-import org.lwjgl.system.MemoryUtil;
 import org.slf4j.Logger;
 
 import javax.imageio.ImageIO;
@@ -64,7 +63,12 @@ public class CustomMenuMod {
 
     /** Pikselleri doğrudan belleğe kopyalar (piksel piksel yazmaktan çok daha hızlı). */
     private static void copyPixels(NativeImage px, int[] data, int w, int h) {
-        MemoryUtil.memIntBuffer(px.getPointer(), w * h).put(data, 0, w * h);
+        for (int y = 0; y < h; y++) {
+            int row = y * w;
+            for (int x = 0; x < w; x++) {
+                px.setPixelRGBA(x, y, data[row + x]);
+            }
+        }
     }
 
     private static void releaseTexture() {
