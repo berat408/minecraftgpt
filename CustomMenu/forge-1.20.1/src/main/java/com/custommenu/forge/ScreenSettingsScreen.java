@@ -47,14 +47,17 @@ public class ScreenSettingsScreen extends Screen {
         addRenderableWidget(Button.builder(Component.literal("Bu ekranı sıfırla"), b -> {
             CustomMenuMod.CONFIG.screens.put(type, new ScreenSettings()); CustomMenuMod.applyAndSave(); minecraft.setScreen(new ScreenSettingsScreen(parent, type));
         }).bounds(rx, y + step * 4, w, 20).build());
-        addRenderableWidget(Button.builder(Component.literal(AudioPlayer.isActive(s.audioPath) ? "Müziği durdur" : "Müzik dene"), b -> {
-            if (s.audioPath.isEmpty()) { AudioPlayer.status = "Önce müzik seç"; return; }
-            if (AudioPlayer.isActive(s.audioPath)) AudioPlayer.stop(); else AudioPlayer.update(s.audioPath, s.volume, s.loop);
+        addRenderableWidget(Button.builder(Component.literal(AudioPlayer.isActive(audioSrc()) ? "Müziği durdur" : "Müzik dene"), b -> {
+            String src = audioSrc();
+            if (src.isEmpty()) { AudioPlayer.status = "Önce müzik seç"; return; }
+            if (AudioPlayer.isActive(src)) AudioPlayer.stop(); else AudioPlayer.update(src, s.volume, s.loop);
             rebuildWidgets();
         }).bounds(lx, y + step * 5, w, 20).build());
+        addRenderableWidget(Button.builder(Component.literal("Video sesi: " + onOff(s.useVideoAudio)), b -> { s.useVideoAudio = !s.useVideoAudio; apply(); })
+                .bounds(rx, y + step * 5, w, 20).build());
         if (type == ScreenType.INTRO)
             addRenderableWidget(Button.builder(Component.literal("Önizle"), b -> minecraft.setScreen(new IntroScreen(this)))
-                    .bounds(rx, y + step * 5, w, 20).build());
+                    .bounds(width / 2 - 75, y + step * 6, 150, 20).build());
         addRenderableWidget(Button.builder(Component.literal("Bitti"), b -> onClose())
                 .bounds(width / 2 - 75, height - 28, 150, 20).build());
     }
@@ -62,10 +65,14 @@ public class ScreenSettingsScreen extends Screen {
         renderBackground(g);
         g.drawCenteredString(font, title, width / 2, 14, 0xFFFFFF);
         super.render(g, mx, my, pt);
-        int y = 34 + 24 * 6 + 6;
+        int y = 34 + 24 * 6 + 6 + (type == ScreenType.INTRO ? 24 : 0);
         g.drawCenteredString(font, Component.literal("Görsel: " + name(s.mediaPath)), width / 2, y, 0xAAAAAA);
         g.drawCenteredString(font, Component.literal("Müzik: " + name(s.audioPath)), width / 2, y + 12, 0xAAAAAA);
         g.drawCenteredString(font, Component.literal(font.plainSubstrByWidth("Görsel: " + CustomMenuMod.mediaStatus + "  |  " + AudioPlayer.status, width - 16)), width / 2, y + 24, 0x88CCFF);
+    }
+    private String audioSrc() {
+        boolean vid = s.useVideoAudio && !s.mediaPath.isEmpty() && MediaKind.detect(s.mediaPath) == MediaKind.VIDEO;
+        return vid ? s.mediaPath : s.audioPath;
     }
     private String name(String p) {
         if (p.isEmpty()) return "(yok)";

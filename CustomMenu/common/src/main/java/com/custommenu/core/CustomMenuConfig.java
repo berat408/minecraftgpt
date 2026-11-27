@@ -30,6 +30,7 @@ public class CustomMenuConfig {
                 s.showMedia = Boolean.parseBoolean(p.getProperty(k + "showMedia", "false"));
                 s.playSound = Boolean.parseBoolean(p.getProperty(k + "playSound", "false"));
                 s.loop = Boolean.parseBoolean(p.getProperty(k + "loop", "true"));
+                s.useVideoAudio = Boolean.parseBoolean(p.getProperty(k + "useVideoAudio", "false"));
                 s.mediaPath = p.getProperty(k + "mediaPath", "");
                 s.audioPath = p.getProperty(k + "audioPath", "");
                 s.fit = p.getProperty(k + "fit", "fit");
@@ -51,6 +52,7 @@ public class CustomMenuConfig {
                 p.setProperty(k + "showMedia", String.valueOf(s.showMedia));
                 p.setProperty(k + "playSound", String.valueOf(s.playSound));
                 p.setProperty(k + "loop", String.valueOf(s.loop));
+                p.setProperty(k + "useVideoAudio", String.valueOf(s.useVideoAudio));
                 p.setProperty(k + "mediaPath", s.mediaPath);
                 p.setProperty(k + "audioPath", s.audioPath);
                 p.setProperty(k + "fit", s.fit);

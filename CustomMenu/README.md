@@ -21,3 +21,8 @@ Minecraft menülerini kendi fotoğraf, video, GIF ve müziklerinle kişiselleşt
 | JAR | Yok (GitHub Actions ile derlenebilir: .github/workflows) |
 
 
+
+## Sürüm 1.2.0
+- Ses: biçim dosyanın içeriğine bakılarak seçilir (MP3 hatalara toleranslı, OGG, WAV, M4A/AAC). TEST EDİLMEDİ.
+- Video: kareler zaman damgasına göre sıralanır, tempo zaman damgasıyla tutulur (ileri-geri takılma düzeltmesi). TEST EDİLMEDİ.
+- Video sesi: ekran başına 'Video sesi' ayarı, videonun kendi AAC sesini çalar (JCodec, yansıma ile). TEST EDİLMEDİ.
