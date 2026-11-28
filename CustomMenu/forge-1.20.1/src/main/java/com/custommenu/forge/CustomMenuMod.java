@@ -111,9 +111,34 @@ public class CustomMenuMod {
         return false;
     }
 
-    /** Pikselleri doğrudan belleğe kopyalar (piksel piksel yazmaktan çok daha hızlı). */
+    private static Field ptrField; private static boolean ptrTried;
+
+    /** NativeImage'in iç piksel adresini bulur (getPointer() bu sürümde yok). Bulunamazsa 0 döner. */
+    private static long pixelAddress(NativeImage px, int w, int h) {
+        try {
+            if (!ptrTried) {
+                ptrTried = true;
+                long size = (long) w * h * 4; // 'size' alanı bu değere eşit, adres alanı eşit değil
+                for (Field f : NativeImage.class.getDeclaredFields()) {
+                    if (f.getType() == long.class && !java.lang.reflect.Modifier.isStatic(f.getModifiers())) {
+                        f.setAccessible(true);
+                        if (f.getLong(px) != size) { ptrField = f; break; }
+                    }
+                }
+                if (ptrField == null) LOG.warn("CustomMenu: piksel adresi bulunamadı, yavaş kopyalama kullanılacak");
+            }
+            return ptrField == null ? 0L : ptrField.getLong(px);
+        } catch (Throwable t) { ptrField = null; return 0L; }
+    }
+
+    /** Pikselleri doğrudan belleğe kopyalar (hızlı); olmazsa piksel piksel yazar (yavaş ama kesin). */
     private static void copyPixels(NativeImage px, int[] data, int w, int h) {
-        MemoryUtil.memIntBuffer(px.getPointer(), w * h).put(data, 0, w * h);
+        long addr = pixelAddress(px, w, h);
+        if (addr != 0L) {
+            try { MemoryUtil.memIntBuffer(addr, w * h).put(data, 0, w * h); return; }
+            catch (Throwable t) { ptrField = null; }
+        }
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) px.setPixelRGBA(x, y, data[y * w + x]);
     }
 
     /** Ayarlara göre hazırla: ses de çalacaksa video ses hazır olana kadar bekler, birlikte başlarlar. */
