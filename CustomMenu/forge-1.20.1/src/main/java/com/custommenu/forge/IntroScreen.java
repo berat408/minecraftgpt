@@ -19,7 +19,7 @@ public class IntroScreen extends Screen {
         ScreenSettings s = CustomMenuMod.activeMedia(ScreenType.INTRO);
         long now = System.currentTimeMillis();
         if (s == null) { finish(); return; }
-        if (CustomMenuMod.prepare(s.mediaPath, false, s.useVideoAudio && s.playSound)) {
+        if (CustomMenuMod.prepareFor(s, false)) {
             if (shownAt < 0) shownAt = now;
             ScreenSettings c = new ScreenSettings();
             c.fit = s.fit; c.posX = s.posX; c.posY = s.posY; c.loop = false;

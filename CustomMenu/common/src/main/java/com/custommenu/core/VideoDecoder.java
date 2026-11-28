@@ -27,6 +27,7 @@ public class VideoDecoder implements Runnable {
     public volatile boolean finished, failed;
     public volatile String error = "";
     public volatile double fpsInfo = 0;
+    public volatile int loops = 0;       // tamamlanan tur sayısı (ses ile döngü senkronu için)
     public volatile boolean gate = true; // false ise ses hazır olana kadar oynatma başlamaz
     private volatile boolean stop;
     private final File file; private final boolean loop; private final int maxW; // maxW <= 0: küçültme yok
@@ -36,7 +37,7 @@ public class VideoDecoder implements Runnable {
 
     @Override public void run() {
         try {
-            do { playOnce(); } while (loop && !stop);
+            do { playOnce(); loops++; } while (loop && !stop);
             finished = true;
         } catch (Throwable t) {
             failed = true; error = String.valueOf(t);
@@ -90,6 +91,7 @@ public class VideoDecoder implements Runnable {
 
     private void show(Item it, double fps, long[] st, double[] ts0) throws Exception {
         if (st[0] < 0) { // oynatmayı (gerekirse sesi bekleyerek) başlat
+            if (!gate) latest.set(convert(AWTUtil.toBufferedImage(it.pic))); // bekleme sırasında ilk kare görünsün
             while (!gate && !stop) Thread.sleep(10);
             st[0] = System.nanoTime(); ts0[0] = it.ts;
         }

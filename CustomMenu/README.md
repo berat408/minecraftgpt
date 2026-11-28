@@ -26,3 +26,10 @@ Minecraft menülerini kendi fotoğraf, video, GIF ve müziklerinle kişiselleşt
 - Ses: biçim dosyanın içeriğine bakılarak seçilir (MP3 hatalara toleranslı, OGG, WAV, M4A/AAC). TEST EDİLMEDİ.
 - Video: kareler zaman damgasına göre sıralanır, tempo zaman damgasıyla tutulur (ileri-geri takılma düzeltmesi). TEST EDİLMEDİ.
 - Video sesi: ekran başına 'Video sesi' ayarı, videonun kendi AAC sesini çalar (JCodec, yansıma ile). TEST EDİLMEDİ.
+
+## Sürüm 1.3.0
+- FCL 'geçerli bir ResourcePackInfo yükleyemedi' hatası: modda pack.mcmeta yoktu; Forge 1.20.1 her mod JAR'ında bu dosyayı ister. Eklendi (pack_format 15).
+- Tek medya oturumu: ana menü / ESC / bitiş / intro ekranına her girişte video+müzik sıfırdan ve birlikte başlar; çıkınca video oynatıcı, ses kaynağı ve video dokusu bırakılır.
+- Video ve ses senkron başlar (video ilk kareyi gösterip sesi bekler). 'Video sesi' açıkken video döngüsünde ses de baştan başlar.
+- Ses önbelleği: aynı müziğe tekrar girişte yeniden çözülmez; oyundayken ~1 dk sonra boşaltılır.
+- DERLENMEDİ/OYUNDA TEST EDİLMEDİ: Minecraft/Forge bağımlılıkları olmadan sadece çekirdek + AudioPlayer sözdizimi kontrol edildi, GIF çözücü gerçek GIF ile çalıştırıldı.

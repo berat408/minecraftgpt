@@ -44,6 +44,7 @@ public final class AudioPlayer {
     private static final AtomicReference<Decoded> ready = new AtomicReference<>();
     private static volatile int generation = 0;
     private static String key = "";
+    private static Decoded cache; // son çözülen ses (menüye tekrar girişte anında başlasın)
     private static int source = 0, buffer = 0;
 
     private AudioPlayer() { }
@@ -53,6 +54,13 @@ public final class AudioPlayer {
     public static boolean isPlaying() {
         try { return source != 0 && AL10.alGetSourcei(source, AL10.AL_SOURCE_STATE) == AL10.AL_PLAYING; } catch (Throwable t) { return false; }
     }
+    /** Aynı sesi baştan çalar (video döngüsüyle senkron kalmak için). */
+    public static void rewind() {
+        try { if (source != 0) { AL10.alSourceRewind(source); AL10.alSourcePlay(source); } } catch (Throwable ignored) { }
+    }
+    /** Önbelleği boşalt (ayar değişince veya uzun süre menüde olunmayınca). */
+    public static void clearCache() { cache = null; }
+
     public static void setVolume(float v) {
         try { if (source != 0) AL10.alSourcef(source, AL10.AL_GAIN, v); } catch (Throwable ignored) { }
     }
@@ -63,7 +71,12 @@ public final class AudioPlayer {
             if (path.isEmpty()) { if (!key.isEmpty()) stop(); failedKey = ""; return; }
             if (path.equals(failedKey)) return;
             failedKey = "";
-            if (!path.equals(key)) { stop(); key = path; startDecode(path); }
+            if (!path.equals(key)) {
+                stop(); key = path;
+                Decoded c = cache;
+                if (c != null && c.key.equals(path)) { ready.set(c); status = "Ses hazır (önbellek)"; }
+                else startDecode(path);
+            }
             if (source != 0) {
                 AL10.alSourcef(source, AL10.AL_GAIN, volume);
                 AL10.alSourcei(source, AL10.AL_LOOPING, loop ? 1 : 0);
@@ -125,7 +138,7 @@ public final class AudioPlayer {
                 if (d == null || d.pcm.length == 0) {
                     status = "Ses hatası: dosyadan ses çıkmadı (" + head(f) + ")"; failedKey = k; return;
                 }
-                ready.set(d);
+                ready.set(d); cache = d;
             } catch (Throwable ex) { /* bozuk dosya oyunu çökertmez */
                 LOG.warn("CustomMenu: ses çözülemedi", ex);
                 status = "Ses hatası: " + ex; failedKey = k;

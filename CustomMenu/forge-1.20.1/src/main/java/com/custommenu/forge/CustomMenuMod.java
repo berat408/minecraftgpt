@@ -19,6 +19,7 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.loading.FMLEnvironment;
 import net.minecraftforge.fml.loading.FMLPaths;
+import org.lwjgl.system.MemoryUtil;
 import org.slf4j.Logger;
 
 import javax.imageio.ImageIO;
@@ -35,14 +36,16 @@ public class CustomMenuMod {
     public static final CustomMenuConfig CONFIG = new CustomMenuConfig(FMLPaths.CONFIGDIR.get());
     public static volatile String mediaStatus = "";
 
-    // ---- görsel durumu ----
+    // ---- tek aktif medya oturumu: görsel/GIF/video + (AudioPlayer'da) ses ----
     private static final AtomicReference<byte[]> pendingPng = new AtomicReference<>();
     private static final AtomicReference<GifAnim> pendingGif = new AtomicReference<>();
     private static ResourceLocation tex; private static int texW, texH;
     private static DynamicTexture dyn; private static GifAnim anim; private static long animStart; private static int shownFrame = -1;
-    private static VideoDecoder video;
+    private static VideoDecoder video; private static long videoStartedAt; private static int lastLoops;
     private static String loadedPath = ""; private static volatile boolean loading;
     private static boolean introHandled = false;
+    private static Screen sessionOwner;   // oturumun ait olduğu ekran; ekran değişince oturum yeniden başlar
+    private static int idleTicks = 0;
 
     public CustomMenuMod() {
         CONFIG.load();
@@ -52,23 +55,13 @@ public class CustomMenuMod {
 
     public static void applyAndSave() { CONFIG.save(); reload(); }
 
-    /** Yeniden başlatmadan uygula. */
+    /** Ayar değişti: her şeyi bırak, yeniden başlatmadan baştan uygula. */
     public static void reload() {
         releaseTexture(); stopVideo();
         loadedPath = ""; mediaStatus = "";
         pendingPng.set(null); pendingGif.set(null);
-        AudioPlayer.stop();
+        AudioPlayer.stop(); AudioPlayer.clearCache();
         CONFIG.load();
-    }
-
-    /** Pikselleri doğrudan belleğe kopyalar (piksel piksel yazmaktan çok daha hızlı). */
-    private static void copyPixels(NativeImage px, int[] data, int w, int h) {
-        for (int y = 0; y < h; y++) {
-            int row = y * w;
-            for (int x = 0; x < w; x++) {
-                px.setPixelRGBA(x, y, data[row + x]);
-            }
-        }
     }
 
     private static void releaseTexture() {
@@ -77,6 +70,24 @@ public class CustomMenuMod {
     }
     private static void stopVideo() { if (video != null) { video.stop(); video = null; } }
     private static void fail(String what, Throwable t) { LOG.warn("CustomMenu: " + what, t); mediaStatus = what + ": " + t; }
+
+    private static boolean isOwnScreen(Screen sc) {
+        return sc instanceof CustomMenuScreen || sc instanceof ScreenSettingsScreen || sc instanceof FileBrowserScreen;
+    }
+
+    /**
+     * Ekran (menü) değiştiğinde eski oturumu temiz kapatır: video oynatıcı durur, ses durur, video dokusu bırakılır.
+     * Yeni ekrana girince video ve ses sıfırdan, birlikte başlar. Ayar ekranlarımız oturumu bozmaz.
+     */
+    static void syncScreen(Screen sc) {
+        if (isOwnScreen(sc) || sc == sessionOwner) return;
+        boolean hadVideo = video != null;
+        stopVideo();
+        AudioPlayer.stop();
+        if (hadVideo) { releaseTexture(); loadedPath = ""; }          // video yeniden çözülür (baştan)
+        else if (anim != null) { animStart = System.currentTimeMillis(); shownFrame = -1; } // GIF baştan
+        sessionOwner = sc;                                            // durağan resim: doku korunur, anında görünür
+    }
 
     static ScreenType typeOf(Screen sc) {
         if (sc instanceof IntroScreen) return ScreenType.INTRO;
@@ -100,13 +111,21 @@ public class CustomMenuMod {
         return false;
     }
 
-    /** Görseli/GIF'i/videoyu (gerekirse) yükler; çizilebilir hale geldiyse true. Render thread'den çağrılmalı. */
-    private static long videoStartedAt;
-    static boolean prepare(String path, boolean loop) { return prepare(path, loop, false); }
+    /** Pikselleri doğrudan belleğe kopyalar (piksel piksel yazmaktan çok daha hızlı). */
+    private static void copyPixels(NativeImage px, int[] data, int w, int h) {
+        MemoryUtil.memIntBuffer(px.getPointer(), w * h).put(data, 0, w * h);
+    }
 
-    /** syncAudio: videonun sesi çalacaksa, video ses hazır olana kadar başlamaz. */
-    static boolean prepare(String path, boolean loop, boolean syncAudio) {
+    /** Ayarlara göre hazırla: ses de çalacaksa video ses hazır olana kadar bekler, birlikte başlarlar. */
+    static boolean prepareFor(ScreenSettings s, boolean loop) {
+        boolean sync = s.playSound && (s.useVideoAudio || !s.audioPath.isEmpty());
+        return prepare(s.mediaPath, loop, sync, s.useVideoAudio && sync);
+    }
+
+    /** Görseli/GIF'i/videoyu (gerekirse) yükler; çizilebilir hale geldiyse true. Render thread'den çağrılmalı. */
+    static boolean prepare(String path, boolean loop, boolean syncAudio, boolean rewindOnLoop) {
         Minecraft mc = Minecraft.getInstance();
+        syncScreen(mc.screen);
         byte[] png = pendingPng.getAndSet(null);
         if (png != null) {
             try {
@@ -129,8 +148,10 @@ public class CustomMenuMod {
             } catch (Throwable t) { fail("GIF hatası", t); }
         }
         VideoDecoder v = video;
-        if (v != null && !v.gate && (AudioPlayer.isPlaying() || AudioPlayer.hasFailed() || System.currentTimeMillis() - videoStartedAt > 20000)) v.gate = true;
         if (v != null) {
+            if (!v.gate && (AudioPlayer.isPlaying() || AudioPlayer.hasFailed() || System.currentTimeMillis() - videoStartedAt > 20000)) v.gate = true;
+            int lc = v.loops;
+            if (lc != lastLoops) { lastLoops = lc; if (rewindOnLoop && lc > 0) AudioPlayer.rewind(); } // video döngüsüyle ses baştan
             VideoDecoder.Frame f = v.latest.getAndSet(null);
             if (f != null) {
                 try {
@@ -156,7 +177,7 @@ public class CustomMenuMod {
             mediaStatus = "Yükleniyor...";
             if (kind == MediaKind.VIDEO) {
                 video = new VideoDecoder(file, loop, 0); // orijinal çözünürlük
-                video.gate = !syncAudio; videoStartedAt = System.currentTimeMillis();
+                video.gate = !syncAudio; videoStartedAt = System.currentTimeMillis(); lastLoops = 0;
                 Thread t = new Thread(video, "CustomMenu-Video"); t.setDaemon(true); t.start();
             } else {
                 loading = true;
@@ -213,7 +234,7 @@ public class CustomMenuMod {
         @Override public void render(float partialTick, float alpha) {
             try {
                 ScreenSettings s = activeMedia(ScreenType.MAINMENU);
-                if (s != null && prepare(s.mediaPath, s.loop, s.useVideoAudio && s.playSound)) {
+                if (s != null && prepareFor(s, s.loop)) {
                     Minecraft mc = Minecraft.getInstance();
                     GuiGraphics g = new GuiGraphics(mc, mc.renderBuffers().bufferSource());
                     drawMedia(g, s, mc.getWindow().getGuiScaledWidth(), mc.getWindow().getGuiScaledHeight());
@@ -262,7 +283,7 @@ public class CustomMenuMod {
             try {
                 if (!(e.getScreen() instanceof PauseScreen)) return;
                 ScreenSettings s = activeMedia(ScreenType.PAUSE);
-                if (s == null || !prepare(s.mediaPath, s.loop, s.useVideoAudio && s.playSound)) return;
+                if (s == null || !prepareFor(s, s.loop)) return;
                 drawMedia(e.getGuiGraphics(), s, e.getScreen().width, e.getScreen().height);
             } catch (Throwable t) { LOG.warn("CustomMenu: ESC çizim hatası", t); }
         }
@@ -273,7 +294,7 @@ public class CustomMenuMod {
             try {
                 if (!(e.getScreen() instanceof WinScreen)) return;
                 ScreenSettings s = activeMedia(ScreenType.GAMEOVER);
-                if (s == null || !prepare(s.mediaPath, s.loop, s.useVideoAudio && s.playSound)) return;
+                if (s == null || !prepareFor(s, s.loop)) return;
                 GuiGraphics g = e.getGuiGraphics();
                 g.setColor(1f, 1f, 1f, 0.45f);
                 drawMedia(g, s, e.getScreen().width, e.getScreen().height);
@@ -281,13 +302,15 @@ public class CustomMenuMod {
             } catch (Throwable t) { LOG.warn("CustomMenu: bitiş ekranı çizim hatası", t); }
         }
 
-        /** Müzik: ilgili ekran açıkken çal, ekran kapanınca durdur. */
+        /** Ekran değişimini izler; müzik: ilgili ekran açıkken çal, ekran kapanınca durdur. */
         @SubscribeEvent
         public void onTick(TickEvent.ClientTickEvent e) {
             if (e.phase != TickEvent.Phase.END) return;
-            String path = ""; float vol = 1f; boolean loop = true;
             Screen cur = Minecraft.getInstance().screen;
-            if (cur instanceof CustomMenuScreen || cur instanceof ScreenSettingsScreen || cur instanceof FileBrowserScreen) return; // ayarlarda müzik sürsün/test edilebilsin
+            syncScreen(cur); // ekran değiştiyse eski oturumu bitir (video+ses durur)
+            if (cur == null) { if (++idleTicks > 1200) AudioPlayer.clearCache(); } else idleTicks = 0; // oyundayken ~1 dk sonra ses önbelleğini boşalt
+            if (isOwnScreen(cur)) return; // ayarlarda müzik sürsün/test edilebilsin
+            String path = ""; float vol = 1f; boolean loop = true;
             ScreenType t = typeOf(cur);
             if (t != null && CONFIG.enabled) {
                 ScreenSettings s = CONFIG.get(t);
