@@ -33,3 +33,11 @@ Minecraft menülerini kendi fotoğraf, video, GIF ve müziklerinle kişiselleşt
 - Video ve ses senkron başlar (video ilk kareyi gösterip sesi bekler). 'Video sesi' açıkken video döngüsünde ses de baştan başlar.
 - Ses önbelleği: aynı müziğe tekrar girişte yeniden çözülmez; oyundayken ~1 dk sonra boşaltılır.
 - DERLENMEDİ/OYUNDA TEST EDİLMEDİ: Minecraft/Forge bağımlılıkları olmadan sadece çekirdek + AudioPlayer sözdizimi kontrol edildi, GIF çözücü gerçek GIF ile çalıştırıldı.
+
+## Sürüm 1.3.1
+- Video sesi hatası (ClassNotFoundException ...EsdsBox): AAC ayar baytları artık dosyadan okunuyor (gerçek bir MP4 ile doğrulandı: 12 10 = AAC-LC 44100 Hz stereo).
+- Ses akışlı çalıyor (0,5 sn'lik parçalar, OpenAL tampon kuyruğu): dev bellek dizileri yok, ses neredeyse anında başlar.
+- Video: kare dizileri havuzdan, sıralama gerekmiyorsa kopyalama yok, çözme geri kalırsa anahtar kareye atlayıp sese yetişir.
+- Intro: ilk 1,5 sn siyah ekran; oyunun açılış yükü bitmeden video/ses başlamaz.
+- Derleme hatası (getPointer) önceki sürümde düzeltildi.
+- DERLENMEDİ/OYUNDA TEST EDİLMEDİ (sadece sahte API'lerle sözdizimi + ASC okuyucu gerçek MP4 ile).

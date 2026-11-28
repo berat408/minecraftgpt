@@ -26,26 +26,44 @@ import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.ShortBuffer;
 import java.nio.file.Files;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BooleanSupplier;
+import java.util.ArrayDeque;
+import java.util.Arrays;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
-/** Ses dosyasını PCM'e çevirip Minecraft'ın OpenAL'ında çalar. Biçim, uzantıya değil dosyanın içeriğine bakılarak seçilir:
- *  MP3 (hatalı karelere toleranslı), OGG, WAV, M4A/MP4 (AAC). Ana (render) thread'den çağrılmalı. */
+/**
+ * Ses akış olarak çalınır: arka plan thread'i dosyayı ~0,5 sn'lik parçalar halinde çözer, ana thread parçaları
+ * OpenAL tampon kuyruğuna verir. Böylece dev PCM dizileri/doğrudan tamponlar oluşmaz (bellek, çöp toplama, takılma azalır)
+ * ve ses neredeyse anında başlar. Biçim, uzantıya değil dosya içeriğine bakılarak seçilir:
+ * MP3 (akış, hatalı karelere toleranslı), OGG, WAV, M4A/MP4 (AAC). Ana (render) thread'den çağrılmalı.
+ */
 public final class AudioPlayer {
     private static final Logger LOG = LogUtils.getLogger();
-    private static final int MAX_SHORTS = 24_000_000; // ~3-4 dk stereo; fazlası kesilir
+    private static final int MAX_SHORTS = 24_000_000; // dizi kaynaklarında üst sınır (~3-4 dk stereo)
+    private static final int NBUF = 4;
     public static volatile String status = "";
     private static volatile String failedKey = "";
 
-    private static final class Decoded {
-        final String key; final short[] pcm; final int rate, ch;
-        Decoded(String k, short[] p, int r, int c) { key = k; pcm = p; rate = r; ch = c; }
+    private interface PcmSource {
+        int rate(); int channels();
+        int read(short[] dst) throws Exception;   // 0: bitti
+        void reset() throws Exception;            // baştan
+        void close();
     }
-    private static final AtomicReference<Decoded> ready = new AtomicReference<>();
-    private static volatile int generation = 0;
+
+    private static final class Stream {
+        final String key; final ArrayBlockingQueue<short[]> q = new ArrayBlockingQueue<>(6);
+        volatile boolean stop, ended, failed, loop; volatile int rate, ch; volatile String error = "";
+        Stream(String k, boolean loop) { key = k; this.loop = loop; }
+    }
+
+    private static Stream stream;
     private static String key = "";
-    private static Decoded cache; // son çözülen ses (menüye tekrar girişte anında başlasın)
-    private static int source = 0, buffer = 0;
+    private static int source = 0, nBufs = 0, format = 0, rate = 0;
+    private static final int[] bufs = new int[NBUF];
+    private static final ArrayDeque<Integer> free = new ArrayDeque<>();
+    private static ShortBuffer upload;
+    private static float lastVol = 1f; private static boolean lastLoop = true;
 
     private AudioPlayer() { }
 
@@ -54,15 +72,19 @@ public final class AudioPlayer {
     public static boolean isPlaying() {
         try { return source != 0 && AL10.alGetSourcei(source, AL10.AL_SOURCE_STATE) == AL10.AL_PLAYING; } catch (Throwable t) { return false; }
     }
+    public static void setVolume(float v) {
+        lastVol = v;
+        try { if (source != 0) AL10.alSourcef(source, AL10.AL_GAIN, v); } catch (Throwable ignored) { }
+    }
+    /** Eski API: artık önbellek yok (akış anında başlıyor). */
+    public static void clearCache() { }
+
     /** Aynı sesi baştan çalar (video döngüsüyle senkron kalmak için). */
     public static void rewind() {
-        try { if (source != 0) { AL10.alSourceRewind(source); AL10.alSourcePlay(source); } } catch (Throwable ignored) { }
-    }
-    /** Önbelleği boşalt (ayar değişince veya uzun süre menüde olunmayınca). */
-    public static void clearCache() { cache = null; }
-
-    public static void setVolume(float v) {
-        try { if (source != 0) AL10.alSourcef(source, AL10.AL_GAIN, v); } catch (Throwable ignored) { }
+        String k = key;
+        if (k.isEmpty()) return;
+        boolean lp = lastLoop;
+        stop(); key = k; stream = startStream(k, lp);
     }
 
     /** path boşsa durdurur. Aynı yol tekrar gelirse ses seviyesini/döngüyü günceller. Durum metni korunur. */
@@ -71,21 +93,12 @@ public final class AudioPlayer {
             if (path.isEmpty()) { if (!key.isEmpty()) stop(); failedKey = ""; return; }
             if (path.equals(failedKey)) return;
             failedKey = "";
-            if (!path.equals(key)) {
-                stop(); key = path;
-                Decoded c = cache;
-                if (c != null && c.key.equals(path)) { ready.set(c); status = "Ses hazır (önbellek)"; }
-                else startDecode(path);
-            }
-            if (source != 0) {
-                AL10.alSourcef(source, AL10.AL_GAIN, volume);
-                AL10.alSourcei(source, AL10.AL_LOOPING, loop ? 1 : 0);
-                int st = AL10.alGetSourcei(source, AL10.AL_SOURCE_STATE);
-                status = st == AL10.AL_PLAYING ? "Ses çalıyor" : st == AL10.AL_STOPPED ? "Ses bitti" : "Ses durumu: 0x" + Integer.toHexString(st);
-            } else {
-                Decoded d = ready.get();
-                if (d != null && d.key.equals(key)) play(d, volume, loop);
-            }
+            lastVol = volume; lastLoop = loop;
+            if (!path.equals(key)) { stop(); key = path; stream = startStream(path, loop); status = "Ses yükleniyor..."; }
+            Stream s = stream;
+            if (s == null) return;
+            s.loop = loop;
+            pump(s, volume);
         } catch (Throwable t) {
             LOG.warn("CustomMenu: ses hatası", t);
             status = "Ses hatası: " + t;
@@ -98,60 +111,115 @@ public final class AudioPlayer {
         if (e != AL10.AL_NO_ERROR) throw new IllegalStateException("OpenAL hata kodu 0x" + Integer.toHexString(e) + " (" + where + ")");
     }
 
-    private static void play(Decoded d, float volume, boolean loop) {
+    /** Her tick: biten tamponları geri al, hazır parçalarla doldur, gerekirse çalmayı sürdür. */
+    private static void pump(Stream s, float volume) {
+        if (s.failed) throw new IllegalStateException(s.error);
+        if (source == 0) {
+            if (s.rate > 0 && (s.q.size() >= 2 || (s.ended && !s.q.isEmpty()))) startSource(s, volume);
+            return;
+        }
+        AL10.alSourcef(source, AL10.AL_GAIN, volume);
+        int processed = AL10.alGetSourcei(source, AL10.AL_BUFFERS_PROCESSED);
+        for (int i = 0; i < processed; i++) free.add(AL10.alSourceUnqueueBuffers(source));
+        while (!free.isEmpty()) {
+            short[] chunk = s.q.poll();
+            if (chunk == null) break;
+            int b = free.poll();
+            fill(b, chunk);
+            AL10.alSourceQueueBuffers(source, b);
+        }
+        int queued = AL10.alGetSourcei(source, AL10.AL_BUFFERS_QUEUED);
+        int st = AL10.alGetSourcei(source, AL10.AL_SOURCE_STATE);
+        if (st != AL10.AL_PLAYING) {
+            if (queued > 0) AL10.alSourcePlay(source);                       // veri yetmeyip durduysa sürdür
+            else if (s.ended && s.q.isEmpty()) { status = "Ses bitti"; return; }
+        }
+        status = "Ses çalıyor";
+    }
+
+    private static void fill(int buf, short[] chunk) {
+        upload.clear();
+        upload.put(chunk, 0, chunk.length);
+        upload.flip();
+        AL10.alBufferData(buf, format, upload, rate);
+        check("veri");
+    }
+
+    private static void startSource(Stream s, float volume) {
         if (ALC10.alcGetCurrentContext() == 0L) throw new IllegalStateException("OpenAL ses aygıtı yok");
         AL10.alGetError();
-        ShortBuffer sb = BufferUtils.createShortBuffer(d.pcm.length);
-        sb.put(d.pcm).flip();
-        buffer = AL10.alGenBuffers(); check("buffer");
-        AL10.alBufferData(buffer, d.ch == 1 ? AL10.AL_FORMAT_MONO16 : AL10.AL_FORMAT_STEREO16, sb, d.rate); check("veri");
+        rate = s.rate; format = s.ch == 1 ? AL10.AL_FORMAT_MONO16 : AL10.AL_FORMAT_STEREO16;
+        upload = BufferUtils.createShortBuffer(Math.max(4096, rate * Math.max(1, s.ch)));
         source = AL10.alGenSources(); check("kaynak");
-        AL10.alSourcei(source, AL10.AL_BUFFER, buffer);
+        free.clear(); nBufs = 0;
+        for (int i = 0; i < NBUF; i++) { bufs[i] = AL10.alGenBuffers(); nBufs++; free.add(bufs[i]); }
+        check("buffer");
+        while (!free.isEmpty()) {
+            short[] c = s.q.poll();
+            if (c == null) break;
+            int b = free.poll();
+            fill(b, c);
+            AL10.alSourceQueueBuffers(source, b);
+        }
         AL10.alSourcei(source, AL10.AL_SOURCE_RELATIVE, 1);
         AL10.alSourcef(source, AL10.AL_GAIN, volume);
-        AL10.alSourcei(source, AL10.AL_LOOPING, loop ? 1 : 0);
         AL10.alSourcePlay(source); check("çal");
         status = "Ses çalıyor";
     }
 
     public static void stop() {
-        generation++;
-        ready.set(null);
-        key = "";
+        Stream s = stream;
+        if (s != null) s.stop = true;
+        stream = null; key = "";
         try {
-            if (source != 0) { AL10.alSourceStop(source); AL10.alDeleteSources(source); }
-            if (buffer != 0) AL10.alDeleteBuffers(buffer);
+            if (source != 0) { AL10.alSourceStop(source); AL10.alSourcei(source, AL10.AL_BUFFER, 0); AL10.alDeleteSources(source); }
+            for (int i = 0; i < nBufs; i++) AL10.alDeleteBuffers(bufs[i]);
         } catch (Throwable ignored) { }
-        source = 0; buffer = 0;
+        source = 0; nBufs = 0; free.clear(); upload = null;
     }
 
-    private static void startDecode(String path) {
-        final int gen = generation; final String k = path;
-        status = "Ses yükleniyor...";
-        Thread t = new Thread(() -> {
-            try {
-                File f = new File(path);
-                if (!f.isFile()) throw new IllegalStateException("Dosya bulunamadı");
-                BooleanSupplier cancelled = () -> gen != generation;
-                Decoded d = decodeAny(f, k, cancelled);
-                if (gen != generation) return;
-                if (d == null || d.pcm.length == 0) {
-                    status = "Ses hatası: dosyadan ses çıkmadı (" + head(f) + ")"; failedKey = k; return;
-                }
-                ready.set(d); cache = d;
-            } catch (Throwable ex) { /* bozuk dosya oyunu çökertmez */
-                LOG.warn("CustomMenu: ses çözülemedi", ex);
-                status = "Ses hatası: " + ex; failedKey = k;
-            }
-        }, "CustomMenu-Audio");
+    // ---------------------------------------------------------------- çözme (arka plan)
+
+    private static Stream startStream(String path, boolean loop) {
+        Stream s = new Stream(path, loop);
+        Thread t = new Thread(() -> produce(s, new File(path)), "CustomMenu-Audio");
         t.setDaemon(true); t.start();
+        return s;
     }
 
-    private static byte[] headBytes(File f) throws Exception {
-        byte[] h = new byte[16]; int n;
-        try (FileInputStream in = new FileInputStream(f)) { n = in.read(h); }
-        return n < 0 ? new byte[0] : java.util.Arrays.copyOf(h, n);
+    private static void produce(Stream s, File f) {
+        PcmSource src = null;
+        try {
+            if (!f.isFile()) throw new IllegalStateException("Dosya bulunamadı");
+            src = open(f, s);
+            if (src.channels() > 2) throw new IllegalStateException("2'den fazla kanal desteklenmiyor");
+            s.ch = src.channels(); s.rate = src.rate();
+            int chunk = Math.max(4096, s.rate * s.ch / 2);  // ~0,5 sn
+            boolean any = false;
+            while (!s.stop) {
+                short[] buf = new short[chunk];
+                int n = src.read(buf);
+                if (n <= 0) {
+                    if (!any) throw new IllegalStateException("dosyadan ses çıkmadı (" + head(f) + ")");
+                    if (!s.loop) break;
+                    src.reset(); any = false;
+                    continue;
+                }
+                any = true;
+                if (n < buf.length) buf = Arrays.copyOf(buf, n);
+                while (!s.stop && !s.q.offer(buf, 50, TimeUnit.MILLISECONDS)) { /* tüketici bekleniyor */ }
+            }
+            s.ended = true;
+        } catch (Throwable ex) {
+            if (!s.stop) {
+                LOG.warn("CustomMenu: ses çözülemedi", ex);
+                s.error = String.valueOf(ex); s.failed = true; status = "Ses hatası: " + ex;
+            }
+        } finally {
+            if (src != null) src.close();
+        }
     }
+
     private static String head(File f) {
         try {
             byte[] h = headBytes(f); StringBuilder sb = new StringBuilder();
@@ -159,47 +227,88 @@ public final class AudioPlayer {
             return "başlık: " + sb.toString().trim();
         } catch (Throwable t) { return "başlık okunamadı"; }
     }
+    private static byte[] headBytes(File f) throws Exception {
+        byte[] h = new byte[16]; int n;
+        try (FileInputStream in = new FileInputStream(f)) { n = in.read(h); }
+        return n < 0 ? new byte[0] : Arrays.copyOf(h, n);
+    }
 
-    /** Dosyanın içeriğine bakıp doğru çözücüyü seçer (uzantı yanıltıcı olabilir). */
-    private static Decoded decodeAny(File f, String k, BooleanSupplier cancelled) throws Exception {
+    /** Dosyanın içeriğine bakıp doğru kaynağı seçer (uzantı yanıltıcı olabilir). */
+    private static PcmSource open(File f, Stream s) throws Exception {
         byte[] h = headBytes(f);
         boolean ogg = h.length >= 4 && h[0] == 'O' && h[1] == 'g' && h[2] == 'g' && h[3] == 'S';
         boolean wav = h.length >= 4 && h[0] == 'R' && h[1] == 'I' && h[2] == 'F' && h[3] == 'F';
         boolean mp4 = h.length >= 8 && h[4] == 'f' && h[5] == 't' && h[6] == 'y' && h[7] == 'p';
-        if (ogg) return decodeOgg(f, k);
-        if (wav) return decodeWav(f, k);
+        if (ogg) return decodeOgg(f);
+        if (wav) return decodeWav(f);
         if (mp4) {
-            AacExtractor.Pcm p = AacExtractor.decode(f, MAX_SHORTS, cancelled);
-            return new Decoded(k, p.data, p.rate, p.ch);
+            AacExtractor.Pcm p = AacExtractor.decode(f, MAX_SHORTS, () -> s.stop);
+            return new ArraySource(p.data, p.rate, p.ch);
         }
-        return decodeMp3(f, k, cancelled);
+        return new Mp3Source(f);
     }
 
-    /** Hatalı/bozuk karelere takılmadan atlayıp devam eder. */
-    private static Decoded decodeMp3(File f, String k, BooleanSupplier cancelled) throws Exception {
-        try (BufferedInputStream in = new BufferedInputStream(new FileInputStream(f), 1 << 16)) {
-            Bitstream bs = new Bitstream(in);
-            Decoder dec = new Decoder();
-            short[] out = new short[1 << 20]; int len = 0, errors = 0;
-            while (!cancelled.getAsBoolean() && len < MAX_SHORTS && errors < 3000) {
+    private static final class ArraySource implements PcmSource {
+        private final short[] d; private final int rate, ch; private int pos;
+        ArraySource(short[] d, int rate, int ch) { this.d = d; this.rate = rate; this.ch = ch; }
+        public int rate() { return rate; }
+        public int channels() { return ch; }
+        public int read(short[] dst) { int n = Math.min(dst.length, d.length - pos); if (n <= 0) return 0; System.arraycopy(d, pos, dst, 0, n); pos += n; return n; }
+        public void reset() { pos = 0; }
+        public void close() { }
+    }
+
+    /** MP3'ü kare kare akıtır; bozuk karelere takılmadan atlayıp devam eder. */
+    private static final class Mp3Source implements PcmSource {
+        private final File f; private BufferedInputStream in; private Bitstream bs; private Decoder dec;
+        private short[] pend = new short[2304]; private int pendPos, pendLen, errors, rate, ch; private boolean eof;
+
+        Mp3Source(File f) throws Exception {
+            this.f = f;
+            open();
+            while (pendLen == 0 && !eof) nextFrame();
+            if (pendLen == 0) throw new IllegalStateException("MP3'ten ses çıkmadı (" + head(f) + ")");
+            rate = dec.getOutputFrequency(); ch = dec.getOutputChannels();
+        }
+        private void open() throws Exception {
+            close();
+            in = new BufferedInputStream(new FileInputStream(f), 1 << 16);
+            bs = new Bitstream(in); dec = new Decoder();
+            pendPos = 0; pendLen = 0; errors = 0; eof = false;
+        }
+        private void nextFrame() {
+            pendPos = 0; pendLen = 0;
+            while (!eof && pendLen == 0) {
                 Header h;
-                try { h = bs.readFrame(); } catch (Throwable e) { errors++; continue; }
-                if (h == null) break;
+                try { h = bs.readFrame(); } catch (Throwable e) { if (++errors > 3000) eof = true; continue; }
+                if (h == null) { eof = true; break; }
                 try {
                     SampleBuffer sb = (SampleBuffer) dec.decodeFrame(h, bs);
                     int n = sb.getBufferLength();
-                    if (len + n > out.length) out = java.util.Arrays.copyOf(out, Math.max(out.length * 2, len + n));
-                    System.arraycopy(sb.getBuffer(), 0, out, len, n); len += n;
-                } catch (Throwable e) { errors++; }
+                    if (n > pend.length) pend = new short[n];
+                    System.arraycopy(sb.getBuffer(), 0, pend, 0, n);
+                    pendLen = n;
+                } catch (Throwable e) { if (++errors > 3000) eof = true; }
                 try { bs.closeFrame(); } catch (Throwable ignored) { }
             }
-            if (len == 0) return null;
-            int ch = dec.getOutputChannels();
-            return new Decoded(k, java.util.Arrays.copyOf(out, len), dec.getOutputFrequency(), ch);
         }
+        public int rate() { return rate; }
+        public int channels() { return ch; }
+        public int read(short[] dst) {
+            int filled = 0;
+            while (filled < dst.length) {
+                if (pendPos >= pendLen) { nextFrame(); if (pendLen == 0) break; }
+                int n = Math.min(dst.length - filled, pendLen - pendPos);
+                System.arraycopy(pend, pendPos, dst, filled, n);
+                pendPos += n; filled += n;
+            }
+            return filled;
+        }
+        public void reset() throws Exception { open(); }
+        public void close() { try { if (in != null) in.close(); } catch (Throwable ignored) { } in = null; }
     }
 
-    private static Decoded decodeOgg(File f, String k) throws Exception {
+    private static PcmSource decodeOgg(File f) throws Exception {
         byte[] bytes = Files.readAllBytes(f.toPath());
         ByteBuffer mem = MemoryUtil.memAlloc(bytes.length);
         try (MemoryStack st = MemoryStack.stackPush()) {
@@ -210,12 +319,11 @@ public final class AudioPlayer {
             short[] arr = new short[Math.min(pcm.remaining(), MAX_SHORTS)];
             pcm.get(arr);
             LibCStdlib.free(pcm);
-            if (chn.get(0) > 2) throw new IllegalStateException("2'den fazla kanal desteklenmiyor");
-            return new Decoded(k, arr, sr.get(0), chn.get(0));
+            return new ArraySource(arr, sr.get(0), chn.get(0));
         } finally { MemoryUtil.memFree(mem); }
     }
 
-    private static Decoded decodeWav(File f, String k) throws Exception {
+    private static PcmSource decodeWav(File f) throws Exception {
         try (AudioInputStream src = AudioSystem.getAudioInputStream(f)) {
             AudioFormat sf = src.getFormat();
             if (sf.getChannels() > 2) throw new IllegalStateException("2'den fazla kanal desteklenmiyor");
@@ -227,7 +335,7 @@ public final class AudioPlayer {
                 while ((n = in.read(buf)) > 0 && bo.size() < MAX_SHORTS * 2) bo.write(buf, 0, n);
                 byte[] b = bo.toByteArray(); short[] s = new short[b.length / 2];
                 for (int i = 0; i < s.length; i++) s[i] = (short) ((b[2 * i] & 0xFF) | (b[2 * i + 1] << 8));
-                return new Decoded(k, s, (int) sf.getSampleRate(), sf.getChannels());
+                return new ArraySource(s, (int) sf.getSampleRate(), sf.getChannels());
             }
         }
     }

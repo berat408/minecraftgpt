@@ -46,6 +46,7 @@ public class CustomMenuMod {
     private static boolean introHandled = false;
     private static Screen sessionOwner;   // oturumun ait olduğu ekran; ekran değişince oturum yeniden başlar
     private static int idleTicks = 0;
+    private static GuiGraphics panGraphics; // her karede yeniden oluşturulmasın
 
     public CustomMenuMod() {
         CONFIG.load();
@@ -188,6 +189,7 @@ public class CustomMenuMod {
                     }
                     NativeImage px = dyn.getPixels();
                     if (px != null) { copyPixels(px, f.abgr, f.w, f.h); dyn.upload(); }
+                    v.recycle(f.abgr); // diziyi havuza geri ver
                     mediaStatus = "Video oynuyor (" + f.w + "x" + f.h + ", " + Math.round(v.fpsInfo) + " fps)";
                 } catch (Throwable t) { fail("Video hatası", t); }
             }
@@ -261,7 +263,8 @@ public class CustomMenuMod {
                 ScreenSettings s = activeMedia(ScreenType.MAINMENU);
                 if (s != null && prepareFor(s, s.loop)) {
                     Minecraft mc = Minecraft.getInstance();
-                    GuiGraphics g = new GuiGraphics(mc, mc.renderBuffers().bufferSource());
+                    if (panGraphics == null) panGraphics = new GuiGraphics(mc, mc.renderBuffers().bufferSource());
+                    GuiGraphics g = panGraphics;
                     drawMedia(g, s, mc.getWindow().getGuiScaledWidth(), mc.getWindow().getGuiScaledHeight());
                     g.flush();
                     return;
@@ -335,6 +338,7 @@ public class CustomMenuMod {
             syncScreen(cur); // ekran değiştiyse eski oturumu bitir (video+ses durur)
             if (cur == null) { if (++idleTicks > 1200) AudioPlayer.clearCache(); } else idleTicks = 0; // oyundayken ~1 dk sonra ses önbelleğini boşalt
             if (isOwnScreen(cur)) return; // ayarlarda müzik sürsün/test edilebilsin
+            if (cur instanceof IntroScreen && !((IntroScreen) cur).isSettled()) return; // intro açılışında ses de biraz sonra başlar
             String path = ""; float vol = 1f; boolean loop = true;
             ScreenType t = typeOf(cur);
             if (t != null && CONFIG.enabled) {

@@ -8,6 +8,7 @@ import net.minecraft.network.chat.Component;
 /** Oyun açılışında (Mojang yüklemesinden sonra) ana menüden önce gösterilen intro. Dokununca atlanır. */
 public class IntroScreen extends Screen {
     private final Screen next;
+    private static final long SETTLE_MS = 1500; // oyun açılış yükünden toparlansın (video/ses sonra başlar)
     private final long openedAt = System.currentTimeMillis();
     private long shownAt = -1;
     private boolean closing;
@@ -19,15 +20,17 @@ public class IntroScreen extends Screen {
         ScreenSettings s = CustomMenuMod.activeMedia(ScreenType.INTRO);
         long now = System.currentTimeMillis();
         if (s == null) { finish(); return; }
+        if (now - openedAt < SETTLE_MS) return; // ilk 1,5 sn sadece siyah ekran: çözme/ses henüz başlamaz
         if (CustomMenuMod.prepareFor(s, false)) {
             if (shownAt < 0) shownAt = now;
             ScreenSettings c = new ScreenSettings();
             c.fit = s.fit; c.posX = s.posX; c.posY = s.posY; c.loop = false;
             CustomMenuMod.drawMedia(g, c, width, height);
             if (CustomMenuMod.mediaFinished() || (!CustomMenuMod.isMotion() && now - shownAt > 4000)) finish();
-        } else if (now - openedAt > 10000) finish(); // yüklenemezse takılma
+        } else if (now - openedAt > 12000) finish(); // yüklenemezse takılma
         g.drawCenteredString(font, Component.literal("Atlamak için dokun"), width / 2, height - 14, 0x99FFFFFF);
     }
+    boolean isSettled() { return System.currentTimeMillis() - openedAt >= SETTLE_MS; }
     private void finish() {
         if (closing) return;
         closing = true;
